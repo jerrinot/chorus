@@ -1,0 +1,49 @@
+UUID := sonos-groups@jara.local
+PACKAGE := $(UUID).shell-extension.zip
+EXTENSION_DIR := $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
+AUTOSTART_DIR := $(HOME)/.config/autostart
+AUTOSTART_FILE := $(AUTOSTART_DIR)/sonos-groups-enable.desktop
+SOURCES := metadata.json extension.js sonos.js state.js stylesheet.css
+UNIT_TESTS := tests/parser.test.js tests/client.test.js tests/state.test.js
+
+.PHONY: test test-all test-unit test-live dev pack install enable disable uninstall
+
+test: test-unit
+
+test-all: test-unit test-live
+
+test-unit:
+	@for test in $(UNIT_TESTS); do gjs -m $$test || exit; done
+
+test-live:
+	gjs -m tests/live-read.js
+
+dev: test-unit
+	./scripts/dev-shell.sh
+
+pack:
+	gnome-extensions pack --force --extra-source=sonos.js \
+		--extra-source=state.js --extra-source=LICENSE .
+	chmod 0644 $(PACKAGE)
+
+install:
+	install -d $(EXTENSION_DIR)
+	for source in $(SOURCES); do install -m 0644 $$source $(EXTENSION_DIR)/$$source; done
+	install -m 0755 scripts/enable-on-login.sh $(EXTENSION_DIR)/enable-on-login.sh
+
+enable: install
+	@if gnome-extensions info $(UUID) >/dev/null 2>&1; then \
+		gjs -m scripts/set-enabled.js enable; \
+	else \
+		install -d "$(AUTOSTART_DIR)"; \
+		sed 's|@EXTENSION_DIR@|$(EXTENSION_DIR)|g' \
+			scripts/sonos-groups-enable.desktop > "$(AUTOSTART_FILE)"; \
+		chmod 0644 "$(AUTOSTART_FILE)"; \
+	fi
+
+disable:
+	rm -f "$(AUTOSTART_FILE)"
+	gjs -m scripts/set-enabled.js disable
+
+uninstall: disable
+	rm -rf $(EXTENSION_DIR)

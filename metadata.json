@@ -1,0 +1,8 @@
+{
+  "uuid": "sonos-groups@jara.local",
+  "name": "Chorus",
+  "description": "Group and ungroup Sonos rooms from GNOME Quick Settings.",
+  "shell-version": ["50"],
+  "version": 3,
+  "gettext-domain": "chorus"
+}
