@@ -29,15 +29,11 @@ make test
 make enable
 ```
 
-Open GNOME Quick Settings and select **Sonos**.
+GNOME Shell only discovers extension files when the session starts, so log out
+and back in after the first install and after each update. Then open GNOME
+Quick Settings and select **Sonos**.
 
-GNOME Shell discovers newly installed extensions when the desktop session
-starts. The first install therefore requires one logout/login. A one-time
-autostart entry enables the extension after that login and removes itself once
-the extension is available.
-
-Run `make enable` again to update the installed files, then log out and back in
-to load them. To remove Chorus:
+To remove Chorus:
 
 ```sh
 make uninstall

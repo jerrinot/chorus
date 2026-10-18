@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Enable Chorus
-Comment=Complete the first-time installation of the Chorus extension
-Exec="@EXTENSION_DIR@/enable-on-login.sh"
-OnlyShowIn=GNOME;
-NoDisplay=true
-X-GNOME-Autostart-enabled=true
