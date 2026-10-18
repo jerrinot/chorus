@@ -21,10 +21,8 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-install -d "$extension_dir" "$config_home"
-for source in metadata.json extension.js menuView.js sonos.js state.js stylesheet.css; do
-    install -m 0644 "$project_dir/$source" "$extension_dir/$source"
-done
+install -d "$config_home"
+make -s -C "$project_dir" stage DEST="$extension_dir"
 
 # Keep the development Shell's extension settings separate from the desktop
 # session. The keyfile backend lets us enable the extension before Shell starts.

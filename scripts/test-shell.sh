@@ -13,16 +13,15 @@ extension_dir="$data_home/gnome-shell/extensions/$uuid"
 driver_dir="$data_home/gnome-shell/extensions/$driver_uuid"
 shell_log="$test_root/shell.log"
 session_log="$test_root/session.log"
+driver_result="$test_root/driver-result"
 
 cleanup() {
     find "$test_root" -depth -delete
 }
 trap cleanup EXIT HUP INT TERM
 
-install -d "$extension_dir" "$driver_dir" "$config_home"
-for source in metadata.json extension.js menuView.js sonos.js state.js stylesheet.css; do
-    install -m 0644 "$project_dir/$source" "$extension_dir/$source"
-done
+install -d "$driver_dir" "$config_home"
+make -s -C "$project_dir" stage DEST="$extension_dir"
 install -m 0644 "$project_dir/tests/shell-driver/metadata.json" \
     "$driver_dir/metadata.json"
 install -m 0644 "$project_dir/tests/shell-driver/extension.js" \
@@ -39,6 +38,8 @@ export CHORUS_TEST_CONFIG_HOME="$config_home"
 export CHORUS_TEST_DATA_HOME="$data_home"
 export CHORUS_TEST_LOG="$shell_log"
 export CHORUS_TEST_UUID="$uuid"
+export CHORUS_TEST_PROJECT_DIR="$project_dir"
+export CHORUS_TEST_RESULT="$driver_result"
 
 set +e
 dbus-run-session -- sh -eu > "$session_log" 2>&1 <<'EOF'
@@ -77,9 +78,24 @@ if [ "$attempt" -eq 50 ]; then
     exit 1
 fi
 
-# Let the driver open Quick Settings and the initial topology request render
-# either the room view or its normal unavailable state.
-sleep 2
+attempt=0
+while [ ! -f "$CHORUS_TEST_RESULT" ] && [ "$attempt" -lt 50 ]; do
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+
+if [ ! -f "$CHORUS_TEST_RESULT" ]; then
+    echo 'The Chorus menu view test did not finish.' >&2
+    exit 1
+fi
+if ! grep -qx 'pass' "$CHORUS_TEST_RESULT"; then
+    cat "$CHORUS_TEST_RESULT" >&2
+    exit 1
+fi
+
+# Let the initial topology request render either the room view or its normal
+# unavailable state before exercising the extension lifecycle.
+sleep 1
 
 env \
     XDG_CONFIG_HOME="$CHORUS_TEST_CONFIG_HOME" \

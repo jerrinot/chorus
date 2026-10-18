@@ -46,6 +46,8 @@ export class ChorusMenuView {
         this._busyLabels = new Map();
         this._orders = new Map();
         this._busyLabel = null;
+        this._busyItem = null;
+        this._busyItemSensitive = true;
 
         this._overviewSection = new StayOpenMenuSection();
         this._pickerSection = new StayOpenMenuSection();
@@ -123,11 +125,17 @@ export class ChorusMenuView {
             this._renderOverview(topology, isGroupPlaying);
     }
 
-    showBusy(item, text) {
+    startBusy(item) {
         this.clearBusy();
-        this._overviewSection.sensitive = false;
-        this._pickerSection.sensitive = false;
-        this._footerSection.sensitive = false;
+        this._busyItem = item;
+        if (item) {
+            this._busyItemSensitive = item.sensitive;
+            item.sensitive = false;
+        }
+    }
+
+    showBusy(item, text) {
+        this._setSectionsSensitive(false);
 
         if (!item)
             return;
@@ -152,9 +160,16 @@ export class ChorusMenuView {
         if (this._busyLabel)
             this._busyLabel.visible = false;
         this._busyLabel = null;
-        this._overviewSection.sensitive = true;
-        this._pickerSection.sensitive = true;
-        this._footerSection.sensitive = true;
+        if (this._busyItem)
+            this._busyItem.sensitive = this._busyItemSensitive;
+        this._busyItem = null;
+        this._setSectionsSensitive(true);
+    }
+
+    _setSectionsSensitive(sensitive) {
+        this._overviewSection.sensitive = sensitive;
+        this._pickerSection.sensitive = sensitive;
+        this._footerSection.sensitive = sensitive;
     }
 
     _showSections(overview, picker, footer) {

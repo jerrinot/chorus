@@ -49,7 +49,7 @@ make uninstall
 - `make test-live` discovers the current Sonos system and reads its state. It
   never changes room groups.
 - `make test-shell` loads Chorus in an isolated headless GNOME Shell and checks
-  its enable, disable, and shutdown lifecycle.
+  menu interaction state plus the enable, disable, and shutdown lifecycle.
 - `make test-all` runs all three test suites.
 - `make dev` starts an isolated GNOME Shell devkit window with a fresh copy of
   the extension.

@@ -124,22 +124,11 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
             if (this._destroyed || generation !== this._topologyGeneration)
                 return;
 
-            this._topology = topology;
-            if (this._view.sourceRoomId && !topology.speakers.some(
-                room => room.id === this._view.sourceRoomId))
-                this._resetView();
-
-            if (this.menu.isOpen)
-                this._selectOnlyPlayingGroup();
-            this._renderTopology();
-            this._requestPlayback(topology);
+            this._applyTopology(topology);
         } catch (error) {
             if (this._destroyed || generation !== this._topologyGeneration)
                 return;
-            this._topology = null;
-            this._playback.states.clear();
-            this._resetView();
-            this._renderError();
+            this._showUnavailable();
             throw error;
         }
     }
@@ -237,6 +226,25 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         this.reactive = true;
         this._menuView.showError();
         this._stateChanged(false);
+    }
+
+    _showUnavailable() {
+        this._topology = null;
+        this._playback.states.clear();
+        this._resetView();
+        this._renderError();
+    }
+
+    _applyTopology(topology) {
+        this._topology = topology;
+        if (this._view.sourceRoomId && !topology.speakers.some(
+            room => room.id === this._view.sourceRoomId))
+            this._resetView();
+
+        if (this.menu.isOpen)
+            this._selectOnlyPlayingGroup();
+        this._renderTopology();
+        this._requestPlayback(topology);
     }
 
     _renderTopology() {
@@ -370,8 +378,7 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         if (this._destroyed || this._operation)
             return;
 
-        if (busyItem)
-            busyItem.sensitive = false;
+        this._menuView.startBusy(busyItem);
 
         if (busyText) {
             this._progressTimer = GLib.timeout_add(
@@ -389,21 +396,18 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         this._topologyGeneration++;
         const promise = this._performAction(action);
         this._operation = promise;
-        promise.then(result => {
+        promise.then(topology => {
             if (this._operation !== promise)
                 return;
             this._operation = null;
-            this._finishAction(result);
+            this._finishAction(topology);
         });
     }
 
     async _performAction(action) {
-        let actionTopology = null;
         let actionError = null;
         try {
-            const result = await action();
-            if (result?.groups && result?.speakers)
-                actionTopology = result;
+            return await action();
         } catch (error) {
             actionError = error;
             if (!this._destroyed) {
@@ -413,11 +417,8 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
             }
         }
 
-        if (actionTopology)
-            return {topology: actionTopology};
-
         try {
-            return {topology: await this._client.getTopology()};
+            return await this._client.getTopology();
         } catch (error) {
             if (!this._destroyed) {
                 if (actionError)
@@ -425,7 +426,7 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
                 else
                     this._reportError(error, _('Could not update Sonos rooms'));
             }
-            return {topology: null};
+            return null;
         }
     }
 
@@ -445,28 +446,20 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         this._menuView.clearBusy();
     }
 
-    _finishAction({topology}) {
+    _finishAction(topology) {
         this._clearProgress();
         if (this._destroyed)
             return;
 
         if (!topology) {
-            this._topology = null;
-            this._resetView();
-            this._renderError();
+            this._showUnavailable();
             return;
         }
-
-        this._topology = topology;
-        if (this._view.sourceRoomId && !topology.speakers.some(
-            room => room.id === this._view.sourceRoomId))
-            this._resetView();
 
         if (!this.menu.isOpen)
             this._resetView();
 
-        this._renderTopology();
-        this._requestPlayback(topology);
+        this._applyTopology(topology);
     }
 
     _reportError(error, userMessage) {

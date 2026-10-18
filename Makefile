@@ -3,10 +3,11 @@ PACKAGE := $(UUID).shell-extension.zip
 EXTENSION_DIR := $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
 AUTOSTART_DIR := $(HOME)/.config/autostart
 AUTOSTART_FILE := $(AUTOSTART_DIR)/sonos-groups-enable.desktop
-SOURCES := metadata.json extension.js menuView.js sonos.js state.js stylesheet.css
+EXTENSION_SOURCES := metadata.json extension.js menuView.js sonos.js state.js stylesheet.css
+PACK_EXTRA_SOURCES := $(filter-out metadata.json extension.js stylesheet.css,$(EXTENSION_SOURCES)) LICENSE
 UNIT_TESTS := tests/parser.test.js tests/client.test.js tests/state.test.js
 
-.PHONY: test test-all test-unit test-live test-shell dev pack install enable disable uninstall
+.PHONY: test test-all test-unit test-live test-shell dev pack stage install enable disable uninstall
 
 test: test-unit
 
@@ -25,14 +26,17 @@ dev: test-unit
 	./scripts/dev-shell.sh
 
 pack:
-	gnome-extensions pack --force --extra-source=menuView.js \
-		--extra-source=sonos.js \
-		--extra-source=state.js --extra-source=LICENSE .
+	gnome-extensions pack --force \
+		$(addprefix --extra-source=,$(PACK_EXTRA_SOURCES)) .
 	chmod 0644 $(PACKAGE)
 
+stage:
+	@test -n "$(DEST)" || { echo 'DEST is required' >&2; exit 2; }
+	install -d "$(DEST)"
+	for source in $(EXTENSION_SOURCES); do install -m 0644 "$$source" "$(DEST)/$$source"; done
+
 install:
-	install -d "$(EXTENSION_DIR)"
-	for source in $(SOURCES); do install -m 0644 "$$source" "$(EXTENSION_DIR)/$$source"; done
+	$(MAKE) stage DEST="$(EXTENSION_DIR)"
 	install -m 0755 scripts/enable-on-login.sh "$(EXTENSION_DIR)/enable-on-login.sh"
 
 enable: install
