@@ -43,11 +43,9 @@ export class ChorusMenuView {
         this._actions = actions;
         this._groupRows = new Map();
         this._roomRows = new Map();
-        this._busyLabels = new Map();
         this._orders = new Map();
         this._busyLabel = null;
         this._busyItem = null;
-        this._busyItemSensitive = true;
 
         this._overviewSection = new StayOpenMenuSection();
         this._pickerSection = new StayOpenMenuSection();
@@ -86,6 +84,10 @@ export class ChorusMenuView {
             () => this._actions.playEverywhere(this._everywhereItem));
         this._onlyItem = this._footerSection.addAction(
             _('Only this room'), () => this._actions.keepOnly(this._onlyItem));
+        this._busyLabels = new Map([this._everywhereItem, this._onlyItem]
+            .map(item => [item, trailingLabel(item)]));
+        for (const label of this._busyLabels.values())
+            label.visible = false;
 
         this.showLoading();
     }
@@ -115,8 +117,7 @@ export class ChorusMenuView {
     }
 
     render(topology, sourceRoomId, isGroupPlaying) {
-        this._placeholder.visible = topology.speakers.length === 0;
-        this._placeholder.label.text = _('No Sonos rooms found');
+        this._placeholder.visible = false;
 
         const source = topology.speakers.find(room => room.id === sourceRoomId);
         if (source)
@@ -128,23 +129,17 @@ export class ChorusMenuView {
     startBusy(item) {
         this.clearBusy();
         this._busyItem = item;
-        if (item) {
-            this._busyItemSensitive = item.sensitive;
+        if (item)
             item.sensitive = false;
-        }
     }
 
     showBusy(item, text) {
         this._setSectionsSensitive(false);
 
-        if (!item)
+        const label = this._busyLabels.get(item);
+        if (!label)
             return;
 
-        let label = this._busyLabels.get(item);
-        if (!label) {
-            label = trailingLabel(item);
-            this._busyLabels.set(item, label);
-        }
         label.text = text;
         label.visible = true;
         this._busyLabel = label;
@@ -161,7 +156,7 @@ export class ChorusMenuView {
             this._busyLabel.visible = false;
         this._busyLabel = null;
         if (this._busyItem)
-            this._busyItem.sensitive = this._busyItemSensitive;
+            this._busyItem.sensitive = true;
         this._busyItem = null;
         this._setSectionsSensitive(true);
     }
@@ -289,7 +284,6 @@ export class ChorusMenuView {
         for (const room of topology.speakers) {
             const row = this._roomRow(room);
             const selected = room.group.id === targetGroup.id;
-            row.selected = selected;
             row.item.label.text = room.name;
             row.item.setOrnament(selected
                 ? PopupMenu.Ornament.CHECK
@@ -325,9 +319,9 @@ export class ChorusMenuView {
 
         const item = new PopupMenu.PopupMenuItem(room.name);
         item.accessible_role = Atk.Role.CHECK_MENU_ITEM;
-        row = {item, roomId: room.id, selected: false};
+        row = {item, roomId: room.id};
         item.connect('activate', () =>
-            this._actions.toggleRoom(row.roomId, !row.selected, item));
+            this._actions.toggleRoom(row.roomId, item));
         this._pickerSection.addMenuItem(item);
         this._roomRows.set(room.id, row);
         return row;

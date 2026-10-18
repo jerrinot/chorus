@@ -208,12 +208,7 @@ function dbusCall(path, interfaceName, method, parameters, timeoutMs) {
 }
 
 function delay(milliseconds) {
-    return new Promise(resolve => {
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, milliseconds, () => {
-            resolve();
-            return GLib.SOURCE_REMOVE;
-        });
-    });
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 function groupContaining(topology, roomId) {
@@ -252,15 +247,13 @@ export class SonosClient {
         const [browserPath] = result.deepUnpack();
 
         let subscriptionId = 0;
-        let timeoutId = 0;
+        let timeoutId = null;
         let lastResolveError = null;
         try {
             const origin = await new Promise((resolve, reject) => {
                 const finish = (callback, value) => {
-                    if (timeoutId) {
-                        GLib.source_remove(timeoutId);
-                        timeoutId = 0;
-                    }
+                    clearTimeout(timeoutId);
+                    timeoutId = null;
                     callback(value);
                 };
 
@@ -306,15 +299,11 @@ export class SonosClient {
                             });
                     });
 
-                timeoutId = GLib.timeout_add(
-                    GLib.PRIORITY_DEFAULT,
-                    DISCOVERY_TIMEOUT_MS,
-                    () => {
-                        timeoutId = 0;
-                        reject(lastResolveError ?? new Error(
-                            'No Sonos rooms were found on this network'));
-                        return GLib.SOURCE_REMOVE;
-                    });
+                timeoutId = setTimeout(() => {
+                    timeoutId = null;
+                    reject(lastResolveError ?? new Error(
+                        'No Sonos rooms were found on this network'));
+                }, DISCOVERY_TIMEOUT_MS);
 
                 dbusCall(
                     browserPath,
@@ -329,8 +318,7 @@ export class SonosClient {
         } finally {
             if (subscriptionId)
                 Gio.DBus.system.signal_unsubscribe(subscriptionId);
-            if (timeoutId)
-                GLib.source_remove(timeoutId);
+            clearTimeout(timeoutId);
 
             dbusCall(
                 browserPath,
@@ -471,9 +459,6 @@ export class SonosClient {
     }
 
     async joinRoom(room, coordinator) {
-        if (room.id === coordinator.id)
-            return this.getTopology();
-
         await this._requestJoin(room, coordinator);
 
         return this._waitForTopology(topology => {
@@ -507,9 +492,6 @@ export class SonosClient {
             targetGroup.members.map(member => member.id));
         const joiningRooms = topology.speakers.filter(
             room => !targetRoomIds.has(room.id));
-        if (joiningRooms.length === 0)
-            return topology;
-
         await Promise.all(joiningRooms.map(room =>
             this._requestJoin(room, coordinator)));
         const roomIds = topology.speakers.map(room => room.id);

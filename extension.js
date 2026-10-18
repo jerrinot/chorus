@@ -1,4 +1,3 @@
-import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -32,11 +31,9 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         this._logger = logger;
         this._stateChanged = stateChanged;
         this._topology = null;
-        this._playback = {
-            states: new Map(),
-            queuedTopology: null,
-            promise: null,
-        };
+        this._playbackStates = new Map();
+        this._queuedPlaybackTopology = null;
+        this._loadingPlayback = false;
         this._view = {
             automatic: true,
             sourceRoomId: null,
@@ -45,14 +42,10 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         this._operation = null;
         this._backgroundRefreshTimer = null;
         this._visibleRefreshTimer = null;
-        this._progressTimer = 0;
+        this._progressTimer = null;
         this._destroyed = false;
         this._refreshScheduler = new RefreshScheduler(
-            () => this._refreshTopology(),
-            async () => {
-                if (this._operation)
-                    await this._operation;
-            });
+            () => this._refreshTopology());
 
         this.menu.setHeader(
             'audio-speakers-symbolic',
@@ -62,8 +55,7 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         this._menuView = new ChorusMenuView(this.menu, {
             showRoomPicker: roomId => this._showRoomPicker(roomId),
             showOverview: () => this._showOverview(),
-            toggleRoom: (roomId, selected, item) =>
-                this._toggleRoom(roomId, selected, item),
+            toggleRoom: (roomId, item) => this._toggleRoom(roomId, item),
             playEverywhere: item => this._playEverywhere(item),
             keepOnly: item => this._keepOnlySource(item),
             retry: () => this.refresh(true).catch(error =>
@@ -104,10 +96,8 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         clearInterval(this._backgroundRefreshTimer);
         this._backgroundRefreshTimer = null;
         this._stopVisibleRefresh();
-        if (this._progressTimer) {
-            GLib.source_remove(this._progressTimer);
-            this._progressTimer = 0;
-        }
+        clearTimeout(this._progressTimer);
+        this._progressTimer = null;
         super.destroy();
     }
 
@@ -118,6 +108,9 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         return this._refreshScheduler.request(force);
     }
 
+    // A refresh that overlaps the start or end of a room-group action may
+    // carry a pre-action or mid-action snapshot. The action's converged
+    // result supersedes it, so the generation changes at both boundaries.
     async _refreshTopology() {
         const generation = this._topologyGeneration;
         try {
@@ -134,43 +127,34 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         }
     }
 
-    _requestPlayback(topology) {
-        this._playback.queuedTopology = topology;
-        if (this._playback.promise || this._destroyed)
+    async _requestPlayback(topology) {
+        this._queuedPlaybackTopology = topology;
+        if (this._loadingPlayback)
             return;
 
-        const promise = this._loadPlayback();
-        this._playback.promise = promise;
-        promise.catch(error => this._logger.error(error)).finally(() => {
-            if (this._playback.promise === promise)
-                this._playback.promise = null;
-            if (this._playback.queuedTopology && !this._destroyed)
-                this._requestPlayback(this._playback.queuedTopology);
-        });
-    }
+        this._loadingPlayback = true;
+        try {
+            while (!this._destroyed && this._queuedPlaybackTopology) {
+                const queued = this._queuedPlaybackTopology;
+                this._queuedPlaybackTopology = null;
+                const states = await this._client.getPlaybackStates(queued);
+                if (this._destroyed || this._topology !== queued)
+                    continue;
 
-    async _loadPlayback() {
-        while (!this._destroyed && this._playback.queuedTopology) {
-            const topology = this._playback.queuedTopology;
-            this._playback.queuedTopology = null;
-            const states = await this._client.getPlaybackStates(topology);
-
-            if (this._destroyed)
-                return;
-            if (this._topology !== topology)
-                continue;
-
-            this._playback.states = states;
-            if (this.menu.isOpen)
-                this._selectOnlyPlayingGroup();
-            if (!this._operation)
-                this._renderTopology();
+                this._playbackStates = states;
+                if (this.menu.isOpen)
+                    this._selectOnlyPlayingGroup();
+                if (!this._operation)
+                    this._renderTopology();
+            }
+        } finally {
+            this._loadingPlayback = false;
         }
     }
 
     _isGroupPlaying(group) {
         return ACTIVE_TRANSPORT_STATES.has(
-            this._playback.states.get(group.coordinatorId));
+            this._playbackStates.get(group.coordinatorId));
     }
 
     _playingGroups() {
@@ -231,7 +215,7 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
 
     _showUnavailable() {
         this._topology = null;
-        this._playback.states.clear();
+        this._playbackStates.clear();
         this._resetView();
         this._renderError();
     }
@@ -245,7 +229,7 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         if (this.menu.isOpen)
             this._selectOnlyPlayingGroup();
         this._renderTopology();
-        this._requestPlayback(topology);
+        this._requestPlayback(topology).catch(error => this._logger.error(error));
     }
 
     _renderTopology() {
@@ -300,7 +284,7 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         this._renderTopology();
     }
 
-    _toggleRoom(roomId, selected, item) {
+    _toggleRoom(roomId, item) {
         if (this._operation)
             return;
 
@@ -312,21 +296,14 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
             return;
 
         const targetGroup = source.group;
+        const join = room.group.id !== targetGroup.id;
         this._setManualView(source.id);
-        const alreadySelected = room.group.id === targetGroup.id;
-        if (selected === alreadySelected)
-            return;
 
-        if (!selected && targetGroup.members.length === 1) {
-            this._menuView.setRoomSelected(item, true);
-            return;
-        }
+        // Show the checkmark immediately; the converged topology reconciles
+        // it if Sonos rejects the change.
+        this._menuView.setRoomSelected(item, join);
 
-        // Make the choice feel immediate. A topology refresh reconciles the
-        // checkmark if Sonos rejects or changes the operation.
-        this._menuView.setRoomSelected(item, selected);
-
-        if (selected) {
+        if (join) {
             this._runAction(
                 () => this._client.joinRoom(room, coordinatorOf(targetGroup)),
                 {busyItem: item});
@@ -376,30 +353,19 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
     }
 
     _runAction(action, {busyItem = null, busyText = null} = {}) {
-        if (this._destroyed || this._operation)
-            return;
-
         this._menuView.startBusy(busyItem);
 
         if (busyText) {
-            this._progressTimer = GLib.timeout_add(
-                GLib.PRIORITY_DEFAULT,
-                PROGRESS_DELAY_MS,
-                () => {
-                    this._progressTimer = 0;
-                    this._showProgress(busyItem, busyText);
-                    return GLib.SOURCE_REMOVE;
-                });
+            this._progressTimer = setTimeout(() => {
+                this._progressTimer = null;
+                this._showProgress(busyItem, busyText);
+            }, PROGRESS_DELAY_MS);
         }
 
-        // Discard refreshes that began before this mutation.
         this._topologyGeneration++;
-        const promise = this._performAction(action);
-        this._operation = promise;
-        promise.then(topology => {
-            if (this._operation !== promise)
-                return;
+        this._operation = this._performAction(action).then(topology => {
             this._operation = null;
+            this._topologyGeneration++;
             this._finishAction(topology);
         });
     }
@@ -439,10 +405,8 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
     }
 
     _clearProgress() {
-        if (this._progressTimer) {
-            GLib.source_remove(this._progressTimer);
-            this._progressTimer = 0;
-        }
+        clearTimeout(this._progressTimer);
+        this._progressTimer = null;
         this._menuView.clearBusy();
     }
 
