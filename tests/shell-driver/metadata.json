@@ -1,5 +1,5 @@
 {
-  "uuid": "chorus-shell-test@jara.local",
+  "uuid": "chorus-shell-test@jerrinot.github.io",
   "name": "Chorus Shell Test Driver",
   "description": "Opens Quick Settings during the isolated lifecycle test.",
   "shell-version": ["50"],

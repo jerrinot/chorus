@@ -89,10 +89,7 @@ function topologyStateFromResponse(response) {
 }
 
 export function parseTopologyResponse(response) {
-    // ZoneGroupState is a second XML document escaped inside the SOAP reply.
-    // This small reader targets that Sonos document shape and deliberately
-    // accepts namespace prefixes, either attribute quote style, nested bonded
-    // components, and named or numeric character references.
+    // ZoneGroupState is an escaped XML document inside the SOAP response.
     const state = topologyStateFromResponse(response);
     const groups = [];
     const groupExpression =

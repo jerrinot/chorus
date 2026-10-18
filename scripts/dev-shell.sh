@@ -2,7 +2,7 @@
 
 set -eu
 
-uuid='sonos-groups@jara.local'
+uuid='chorus@jerrinot.github.io'
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runtime_base=${XDG_RUNTIME_DIR:-/tmp}
 

@@ -1,11 +1,11 @@
-UUID := sonos-groups@jara.local
+UUID := chorus@jerrinot.github.io
 PACKAGE := $(UUID).shell-extension.zip
 EXTENSION_DIR := $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
 AUTOSTART_DIR := $(HOME)/.config/autostart
-AUTOSTART_FILE := $(AUTOSTART_DIR)/sonos-groups-enable.desktop
-EXTENSION_SOURCES := metadata.json extension.js menuView.js sonos.js state.js stylesheet.css
+AUTOSTART_FILE := $(AUTOSTART_DIR)/chorus-enable.desktop
+EXTENSION_SOURCES := metadata.json extension.js menuView.js sonos.js refreshScheduler.js stylesheet.css
 PACK_EXTRA_SOURCES := $(filter-out metadata.json extension.js stylesheet.css,$(EXTENSION_SOURCES)) LICENSE
-UNIT_TESTS := tests/parser.test.js tests/client.test.js tests/state.test.js
+UNIT_TESTS := tests/parser.test.js tests/client.test.js tests/refreshScheduler.test.js
 
 .PHONY: test test-all test-unit test-live test-shell dev pack stage install enable disable uninstall
 
@@ -45,7 +45,7 @@ enable: install
 	else \
 		install -d "$(AUTOSTART_DIR)"; \
 		sed 's|@EXTENSION_DIR@|$(EXTENSION_DIR)|g' \
-			scripts/sonos-groups-enable.desktop > "$(AUTOSTART_FILE)"; \
+			scripts/chorus-enable.desktop > "$(AUTOSTART_FILE)"; \
 		chmod 0644 "$(AUTOSTART_FILE)"; \
 	fi
 

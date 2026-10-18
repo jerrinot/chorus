@@ -1,7 +1,7 @@
 #!/bin/sh
 
-uuid='sonos-groups@jara.local'
-autostart_file="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/sonos-groups-enable.desktop"
+uuid='chorus@jerrinot.github.io'
+autostart_file="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/chorus-enable.desktop"
 attempt=0
 
 while [ "$attempt" -lt 10 ]; do

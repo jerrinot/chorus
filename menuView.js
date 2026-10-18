@@ -93,7 +93,7 @@ export class ChorusMenuView {
     showLoading() {
         this.clearBusy();
         this._showSections(false, false, false);
-        this._placeholder.label.text = _('Finding Sonos rooms…');
+        this._placeholder.label.text = _('Finding rooms…');
         this._placeholder.visible = true;
         this._footerSeparator.visible = false;
     }

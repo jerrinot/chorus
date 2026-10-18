@@ -1,4 +1,4 @@
-import {RefreshScheduler} from '../state.js';
+import {RefreshScheduler} from '../refreshScheduler.js';
 import {assertEqual, assertRejects} from './assert.js';
 
 async function flushMicrotasks() {
@@ -53,4 +53,4 @@ await assertRejects(recovering.request(),
 assertEqual(await recovering.request(), 'recovered',
     'a failed refresh must not leave the scheduler locked');
 
-print('state tests passed');
+print('refresh scheduler tests passed');

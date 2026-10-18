@@ -11,7 +11,7 @@ import {
 
 import {ChorusMenuView, groupLabel} from './menuView.js';
 import {coordinatorOf, SonosClient} from './sonos.js';
-import {RefreshScheduler} from './state.js';
+import {RefreshScheduler} from './refreshScheduler.js';
 
 const BACKGROUND_REFRESH_INTERVAL_SECONDS = 60;
 const VISIBLE_REFRESH_INTERVAL_SECONDS = 5;
@@ -23,7 +23,6 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
     _init(client, logger, stateChanged) {
         super._init({
             title: _('Sonos'),
-            subtitle: _('Finding rooms…'),
             iconName: 'audio-speakers-symbolic',
             menuButtonAccessibleName: _('Open Sonos'),
             toggleMode: false,
@@ -44,6 +43,7 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
         };
         this._topologyGeneration = 0;
         this._operation = null;
+        this._backgroundRefreshTimer = null;
         this._visibleRefreshTimer = null;
         this._progressTimer = 0;
         this._destroyed = false;
@@ -88,26 +88,27 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
             }
         });
         this.connect('clicked', () => this.menu.open());
-        this.connect('destroy', () => this._stop());
 
         this._renderLoading();
+
+        this._backgroundRefreshTimer = setInterval(() => {
+            this.refresh().catch(error =>
+                this._logger.debug(error.stack ?? error.message));
+        }, BACKGROUND_REFRESH_INTERVAL_SECONDS * 1000);
+        this.refresh().catch(error =>
+            this._logger.debug(error.stack ?? error.message));
     }
 
     destroy() {
-        this._stop();
-        super.destroy();
-    }
-
-    _stop() {
-        if (this._destroyed)
-            return;
-
         this._destroyed = true;
+        clearInterval(this._backgroundRefreshTimer);
+        this._backgroundRefreshTimer = null;
         this._stopVisibleRefresh();
         if (this._progressTimer) {
             GLib.source_remove(this._progressTimer);
             this._progressTimer = 0;
         }
+        super.destroy();
     }
 
     async refresh(force = false) {
@@ -391,8 +392,7 @@ class SonosToggle extends QuickSettings.QuickMenuToggle {
                 });
         }
 
-        // Any topology request started before this mutation may contain a
-        // pre-action snapshot. The converged action result supersedes it.
+        // Discard refreshes that began before this mutation.
         this._topologyGeneration++;
         const promise = this._performAction(action);
         this._operation = promise;
@@ -487,10 +487,6 @@ class SonosIndicator extends QuickSettings.SystemIndicator {
         this.quickSettingsItems.push(this._toggle);
     }
 
-    refresh(force = false) {
-        return this._toggle.refresh(force);
-    }
-
     destroy() {
         this.quickSettingsItems.forEach(item => item.destroy());
         super.destroy();
@@ -503,22 +499,9 @@ export default class ChorusExtension extends Extension {
         this._client = new SonosClient(logger);
         this._indicator = new SonosIndicator(this._client, logger);
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
-
-        this._refreshTimer = setInterval(() => {
-            this._indicator?.refresh().catch(error =>
-                logger.debug(error.stack ?? error.message));
-        }, BACKGROUND_REFRESH_INTERVAL_SECONDS * 1000);
-
-        this._indicator.refresh().catch(error =>
-            logger.debug(error.stack ?? error.message));
     }
 
     disable() {
-        if (this._refreshTimer) {
-            clearInterval(this._refreshTimer);
-            this._refreshTimer = null;
-        }
-
         this._indicator?.destroy();
         this._indicator = null;
 

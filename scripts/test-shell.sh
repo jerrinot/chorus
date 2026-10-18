@@ -2,8 +2,8 @@
 
 set -eu
 
-uuid='sonos-groups@jara.local'
-driver_uuid='chorus-shell-test@jara.local'
+uuid='chorus@jerrinot.github.io'
+driver_uuid='chorus-shell-test@jerrinot.github.io'
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runtime_base=${XDG_RUNTIME_DIR:-/tmp}
 test_root=$(mktemp -d "$runtime_base/chorus-shell-test.XXXXXX")
@@ -27,15 +27,13 @@ install -m 0644 "$project_dir/tests/shell-driver/metadata.json" \
 install -m 0644 "$project_dir/tests/shell-driver/extension.js" \
     "$driver_dir/extension.js"
 
-env \
-    XDG_CONFIG_HOME="$config_home" \
-    XDG_DATA_HOME="$data_home" \
-    GSETTINGS_BACKEND=keyfile \
-    gsettings set org.gnome.shell enabled-extensions \
-        "['$uuid', '$driver_uuid']"
+# Everything below, including the inner dbus session, uses the isolated
+# configuration and extension directories.
+export XDG_CONFIG_HOME="$config_home"
+export XDG_DATA_HOME="$data_home"
+export GSETTINGS_BACKEND=keyfile
+gsettings set org.gnome.shell enabled-extensions "['$uuid', '$driver_uuid']"
 
-export CHORUS_TEST_CONFIG_HOME="$config_home"
-export CHORUS_TEST_DATA_HOME="$data_home"
 export CHORUS_TEST_LOG="$shell_log"
 export CHORUS_TEST_UUID="$uuid"
 export CHORUS_TEST_PROJECT_DIR="$project_dir"
@@ -43,11 +41,7 @@ export CHORUS_TEST_RESULT="$driver_result"
 
 set +e
 dbus-run-session -- sh -eu > "$session_log" 2>&1 <<'EOF'
-env \
-    XDG_CONFIG_HOME="$CHORUS_TEST_CONFIG_HOME" \
-    XDG_DATA_HOME="$CHORUS_TEST_DATA_HOME" \
-    GSETTINGS_BACKEND=keyfile \
-    gnome-shell --headless --wayland --no-x11 --virtual-monitor 1280x720 \
+gnome-shell --headless --wayland --no-x11 --virtual-monitor 1280x720 \
     > "$CHORUS_TEST_LOG" 2>&1 &
 shell_pid=$!
 
@@ -61,11 +55,7 @@ gdbus wait --session --timeout 10 org.gnome.Shell
 
 attempt=0
 while [ "$attempt" -lt 50 ]; do
-    if env \
-            XDG_CONFIG_HOME="$CHORUS_TEST_CONFIG_HOME" \
-            XDG_DATA_HOME="$CHORUS_TEST_DATA_HOME" \
-            GSETTINGS_BACKEND=keyfile \
-            gnome-extensions info "$CHORUS_TEST_UUID" 2>/dev/null |
+    if gnome-extensions info "$CHORUS_TEST_UUID" 2>/dev/null |
             grep -q 'State: ACTIVE'; then
         break
     fi
@@ -97,23 +87,9 @@ fi
 # unavailable state before exercising the extension lifecycle.
 sleep 1
 
-env \
-    XDG_CONFIG_HOME="$CHORUS_TEST_CONFIG_HOME" \
-    XDG_DATA_HOME="$CHORUS_TEST_DATA_HOME" \
-    GSETTINGS_BACKEND=keyfile \
-    gnome-extensions disable "$CHORUS_TEST_UUID"
-env \
-    XDG_CONFIG_HOME="$CHORUS_TEST_CONFIG_HOME" \
-    XDG_DATA_HOME="$CHORUS_TEST_DATA_HOME" \
-    GSETTINGS_BACKEND=keyfile \
-    gnome-extensions enable "$CHORUS_TEST_UUID"
-
-env \
-    XDG_CONFIG_HOME="$CHORUS_TEST_CONFIG_HOME" \
-    XDG_DATA_HOME="$CHORUS_TEST_DATA_HOME" \
-    GSETTINGS_BACKEND=keyfile \
-    gnome-extensions info "$CHORUS_TEST_UUID" |
-    grep -q 'State: ACTIVE'
+gnome-extensions disable "$CHORUS_TEST_UUID"
+gnome-extensions enable "$CHORUS_TEST_UUID"
+gnome-extensions info "$CHORUS_TEST_UUID" | grep -q 'State: ACTIVE'
 EOF
 session_status=$?
 set -e
