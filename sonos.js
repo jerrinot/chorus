@@ -65,6 +65,13 @@ function parseAttributes(source) {
     return attributes;
 }
 
+function requiredAttribute(attributes, name, element) {
+    const value = attributes[name];
+    if (!value)
+        throw new Error(`Sonos ${element} is missing ${name}`);
+    return value;
+}
+
 function originFromLocation(location) {
     const match = location.match(/^https?:\/\/[^/]+/);
     if (!match)
@@ -90,9 +97,14 @@ export function parseTopologyResponse(response) {
     const groups = [];
     const groupExpression =
         /<(?:[A-Za-z0-9_]+:)?ZoneGroup\b([^>]*)>([\s\S]*?)<\/(?:[A-Za-z0-9_]+:)?ZoneGroup\s*>/g;
+    const groupMatches = [...state.matchAll(groupExpression)];
+    if (groupMatches.length === 0)
+        throw new Error('The Sonos topology did not contain any groups');
 
-    for (const groupMatch of state.matchAll(groupExpression)) {
+    for (const groupMatch of groupMatches) {
         const groupAttributes = parseAttributes(groupMatch[1]);
+        const advertisedCoordinator = requiredAttribute(
+            groupAttributes, 'Coordinator', 'group');
         const members = [];
         const memberExpression =
             /<(?:[A-Za-z0-9_]+:)?ZoneGroupMember\b([^>]*?)(?:\/\s*>|>([\s\S]*?)<\/(?:[A-Za-z0-9_]+:)?ZoneGroupMember\s*>)/g;
@@ -105,14 +117,15 @@ export function parseTopologyResponse(response) {
             if (attributes.Invisible === '1')
                 continue;
 
-            if (!attributes.UUID || !attributes.ZoneName || !attributes.Location)
-                continue;
+            const id = requiredAttribute(attributes, 'UUID', 'room');
+            const name = requiredAttribute(attributes, 'ZoneName', 'room');
+            const location = requiredAttribute(attributes, 'Location', 'room');
 
             members.push({
-                id: attributes.UUID,
-                name: attributes.ZoneName,
-                location: attributes.Location,
-                coordinator: attributes.UUID === groupAttributes.Coordinator,
+                id,
+                name,
+                location,
+                coordinator: id === advertisedCoordinator,
             });
         }
 
@@ -121,7 +134,7 @@ export function parseTopologyResponse(response) {
 
         // Some bonded configurations name an invisible component as the
         // coordinator. The first visible room is the usable group target.
-        let coordinatorId = groupAttributes.Coordinator;
+        let coordinatorId = advertisedCoordinator;
         if (!members.some(member => member.id === coordinatorId))
             coordinatorId = members[0].id;
 
@@ -140,6 +153,9 @@ export function parseTopologyResponse(response) {
             members,
         });
     }
+
+    if (groups.length === 0)
+        throw new Error('The Sonos topology did not contain any visible rooms');
 
     groups.sort((left, right) =>
         left.members[0].name.localeCompare(right.members[0].name));
@@ -206,6 +222,10 @@ function delay(milliseconds) {
 function groupContaining(topology, roomId) {
     return topology.groups.find(group =>
         group.members.some(member => member.id === roomId));
+}
+
+export function coordinatorOf(group) {
+    return group.members.find(member => member.coordinator) ?? group.members[0];
 }
 
 export class SonosClient {
@@ -387,8 +407,7 @@ export class SonosClient {
 
     async getPlaybackStates(topology) {
         const entries = await Promise.all(topology.groups.map(async group => {
-            const coordinator = group.members.find(member => member.coordinator) ??
-                group.members[0];
+            const coordinator = coordinatorOf(group);
 
             try {
                 const response = await this._post(
@@ -441,11 +460,8 @@ export class SonosClient {
         throw new Error(`Sonos did not finish ${description}`);
     }
 
-    async joinRoom(room, coordinator) {
-        if (room.id === coordinator.id)
-            return this.getTopology();
-
-        await this._post(
+    async _requestJoin(room, coordinator) {
+        return this._post(
             originFromLocation(room.location),
             '/MediaRenderer/AVTransport/Control',
             AV_TRANSPORT_SERVICE,
@@ -455,6 +471,13 @@ export class SonosClient {
                 CurrentURI: `x-rincon:${coordinator.id}`,
                 CurrentURIMetaData: '',
             });
+    }
+
+    async joinRoom(room, coordinator) {
+        if (room.id === coordinator.id)
+            return this.getTopology();
+
+        await this._requestJoin(room, coordinator);
 
         return this._waitForTopology(topology => {
             const roomGroup = groupContaining(topology, room.id);
@@ -463,13 +486,17 @@ export class SonosClient {
         }, `grouping ${room.name}`);
     }
 
-    async leaveGroup(room) {
-        await this._post(
+    async _requestLeave(room) {
+        return this._post(
             originFromLocation(room.location),
             '/MediaRenderer/AVTransport/Control',
             AV_TRANSPORT_SERVICE,
             'BecomeCoordinatorOfStandaloneGroup',
             {InstanceID: 0});
+    }
+
+    async leaveGroup(room) {
+        await this._requestLeave(room);
 
         return this._waitForTopology(topology => {
             const roomGroup = groupContaining(topology, room.id);
@@ -478,34 +505,53 @@ export class SonosClient {
     }
 
     async joinAll(topology, targetGroup) {
-        const coordinator = targetGroup.members.find(member => member.coordinator) ??
-            targetGroup.members[0];
+        const coordinator = coordinatorOf(targetGroup);
         const targetRoomIds = new Set(
             targetGroup.members.map(member => member.id));
-        let convergedTopology = topology;
+        const joiningRooms = topology.speakers.filter(
+            room => !targetRoomIds.has(room.id));
+        if (joiningRooms.length === 0)
+            return topology;
 
-        for (const room of topology.speakers) {
-            if (!targetRoomIds.has(room.id))
-                convergedTopology = await this.joinRoom(room, coordinator);
-        }
-
-        return convergedTopology;
+        await Promise.all(joiningRooms.map(room =>
+            this._requestJoin(room, coordinator)));
+        const roomIds = topology.speakers.map(room => room.id);
+        return this._waitForTopology(candidate => {
+            const coordinatorGroup = groupContaining(candidate, coordinator.id);
+            return coordinatorGroup && roomIds.every(roomId =>
+                groupContaining(candidate, roomId) === coordinatorGroup);
+        }, 'grouping every room');
     }
 
     async keepOnly(group, sourceRoom) {
         const otherRooms = group.members.filter(room => room.id !== sourceRoom.id);
-        const orderedRooms = [
-            ...otherRooms.filter(room => !room.coordinator),
-            ...otherRooms.filter(room => room.coordinator),
-        ];
+        if (otherRooms.length === 0)
+            return this.getTopology();
 
-        // If the chosen room is not the coordinator, detach the coordinator
-        // last so the chosen room remains after its peers have left.
+        const peers = otherRooms.filter(room => !room.coordinator);
+        const coordinator = otherRooms.find(room => room.coordinator);
         let convergedTopology = null;
-        for (const room of orderedRooms)
-            convergedTopology = await this.leaveGroup(room);
+        if (peers.length > 0) {
+            await Promise.all(peers.map(room => this._requestLeave(room)));
+            convergedTopology = await this._waitForTopology(topology => {
+                if (!peers.every(room =>
+                    groupContaining(topology, room.id)?.members.length === 1))
+                    return false;
+                if (coordinator)
+                    return true;
+                return groupContaining(topology, sourceRoom.id)?.members.length === 1;
+            }, 'separating rooms');
+        }
 
-        return convergedTopology ?? this.getTopology();
+        // A non-coordinator source depends on its coordinator until all peers
+        // have left. Detach that coordinator as a final phase.
+        if (!coordinator)
+            return convergedTopology;
+
+        await this._requestLeave(coordinator);
+        return this._waitForTopology(topology =>
+            groupContaining(topology, sourceRoom.id)?.members.length === 1,
+        `keeping only ${sourceRoom.name}`);
     }
 
 }

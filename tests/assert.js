@@ -19,3 +19,13 @@ export async function assertRejects(promise, message) {
 
     throw new Error(`${message}: expected rejection`);
 }
+
+export function assertThrows(callback, message) {
+    try {
+        callback();
+    } catch (_error) {
+        return;
+    }
+
+    throw new Error(`${message}: expected exception`);
+}

@@ -22,7 +22,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 install -d "$extension_dir" "$config_home"
-for source in metadata.json extension.js sonos.js state.js stylesheet.css; do
+for source in metadata.json extension.js menuView.js sonos.js state.js stylesheet.css; do
     install -m 0644 "$project_dir/$source" "$extension_dir/$source"
 done
 

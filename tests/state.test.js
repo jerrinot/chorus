@@ -1,4 +1,4 @@
-import {RefreshScheduler, ViewMode} from '../state.js';
+import {RefreshScheduler} from '../state.js';
 import {assertEqual, assertRejects} from './assert.js';
 
 async function flushMicrotasks() {
@@ -14,9 +14,6 @@ function deferred() {
     return {promise, resolve};
 }
 
-assertEqual(ViewMode.AUTOMATIC, 'automatic',
-    'automatic view mode must remain explicit');
-
 let runs = 0;
 const requests = [];
 const scheduler = new RefreshScheduler(() => {
@@ -27,6 +24,7 @@ const scheduler = new RefreshScheduler(() => {
 });
 
 const first = scheduler.request();
+const shared = scheduler.request();
 const second = scheduler.request(true);
 const third = scheduler.request(true);
 await flushMicrotasks();
@@ -37,10 +35,11 @@ await flushMicrotasks();
 assertEqual(runs, 2, 'forced waiters must queue exactly one refresh');
 
 requests.shift().resolve('second');
-const results = await Promise.all([first, second, third]);
+const results = await Promise.all([first, shared, second, third]);
 assertEqual(results[0], 'first', 'the initial caller receives its result');
-assertEqual(results[1], 'second', 'the forced caller receives the queued result');
-assertEqual(results[2], 'second', 'forced callers share the queued result');
+assertEqual(results[1], 'first', 'ordinary callers share the active result');
+assertEqual(results[2], 'second', 'the forced caller receives the queued result');
+assertEqual(results[3], 'second', 'forced callers share the queued result');
 
 let attempt = 0;
 const recovering = new RefreshScheduler(async () => {

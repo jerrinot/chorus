@@ -1,9 +1,3 @@
-export const ViewMode = Object.freeze({
-    AUTOMATIC: 'automatic',
-    OVERVIEW: 'overview',
-    MANUAL: 'manual',
-});
-
 export class RefreshScheduler {
     constructor(run, waitUntilIdle = async () => {}) {
         this._run = run;
@@ -16,9 +10,10 @@ export class RefreshScheduler {
 
         if (this._pending) {
             const pending = this._pending;
-            await pending;
             if (!force)
-                return;
+                return pending;
+
+            await pending;
 
             await this._waitUntilIdle();
 

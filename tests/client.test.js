@@ -1,167 +1,189 @@
 import {SonosClient} from '../sonos.js';
 import {assert, assertEqual} from './assert.js';
 
-const topology = {
-    groups: [
-        {
-            id: 'group-kitchen',
-            coordinatorId: 'kitchen',
-            members: [{
-                id: 'kitchen',
-                name: 'Kitchen',
-                location: 'http://192.0.2.10:1400/device.xml',
-                coordinator: true,
-            }],
-        },
-        {
-            id: 'group-library',
-            coordinatorId: 'library',
-            members: [{
-                id: 'library',
-                name: 'Library',
-                location: 'http://192.0.2.11:1400/device.xml',
-                coordinator: true,
-            }],
-        },
-    ],
-};
-topology.speakers = topology.groups.flatMap(group =>
-    group.members.map(room => ({...room, group})));
+function group(id, ...members) {
+    return {
+        id,
+        coordinatorId: members[0].id,
+        members: members.map((member, index) => ({
+            ...member,
+            coordinator: index === 0,
+        })),
+    };
+}
 
-const transportResponse = `<s:Envelope><s:Body>` +
-    `<u:GetTransportInfoResponse>` +
-    `<CurrentTransportState>PLAYING</CurrentTransportState>` +
-    `</u:GetTransportInfoResponse></s:Body></s:Envelope>`;
+function topology(...groups) {
+    const result = {groups};
+    result.speakers = groups.flatMap(currentGroup =>
+        currentGroup.members.map(room => ({...room, group: currentGroup})));
+    return result;
+}
 
-const playbackClient = new SonosClient();
-try {
-    playbackClient._post = async (_origin, _path, _service, action) => {
-        assertEqual(action, 'GetTransportInfo',
+function room(id, address) {
+    return {
+        id,
+        name: id[0].toUpperCase() + id.slice(1),
+        location: `http://${address}:1400/device.xml`,
+    };
+}
+
+class RecordingClient extends SonosClient {
+    constructor({response = '', convergedTopologies = []} = {}) {
+        super();
+        this.posts = [];
+        this.waits = [];
+        this._response = response;
+        this._convergedTopologies = [...convergedTopologies];
+    }
+
+    async _post(origin, path, service, action, parameters) {
+        this.posts.push({origin, path, service, action, parameters});
+        return this._response;
+    }
+
+    async _waitForTopology(predicate, description) {
+        const candidate = this._convergedTopologies.shift();
+        assert(candidate, `missing converged topology for ${description}`);
+        assert(predicate(candidate), `topology must prove ${description}`);
+        this.waits.push(description);
+        return candidate;
+    }
+}
+
+const kitchen = room('kitchen', '192.0.2.10');
+const library = room('library', '192.0.2.11');
+const office = room('office', '192.0.2.12');
+const separateTopology = topology(
+    group('group-kitchen', kitchen),
+    group('group-library', library),
+    group('group-office', office));
+
+async function testPlaybackStates() {
+    const response = `<s:Envelope><s:Body>` +
+        `<u:GetTransportInfoResponse>` +
+        `<CurrentTransportState>PLAYING</CurrentTransportState>` +
+        `</u:GetTransportInfoResponse></s:Body></s:Envelope>`;
+    const client = new RecordingClient({response});
+    try {
+        const states = await client.getPlaybackStates(separateTopology);
+        assertEqual(states.size, 3, 'every coordinator must be queried');
+        assertEqual(states.get('kitchen'), 'PLAYING',
+            'playback must be keyed by coordinator');
+        assert(client.posts.every(post => post.action === 'GetTransportInfo'),
             'playback detection must only read transport information');
-        return transportResponse;
-    };
-    const states = await playbackClient.getPlaybackStates(topology);
-    assertEqual(states.get('kitchen'), 'PLAYING',
-        'playback must be keyed by coordinator');
-    assertEqual(states.get('library'), 'PLAYING',
-        'every coordinator must be queried');
-} finally {
-    playbackClient.destroy();
+    } finally {
+        client.destroy();
+    }
 }
 
-const sourceGroup = topology.groups[0];
-const coordinator = sourceGroup.members[0];
-assert(coordinator.group === undefined,
-    'group members must not require a synthetic backlink');
-
-const joinAllClient = new SonosClient();
-try {
-    const joined = [];
-    joinAllClient.joinRoom = async (room, target) => {
-        joined.push([room.id, target.id]);
-        return topology;
-    };
-    await joinAllClient.joinAll(topology, sourceGroup);
-    assertEqual(joined.length, 1,
-        'play everywhere must skip the target group');
-    assertEqual(joined[0][0], 'library',
-        'play everywhere must join rooms outside the target group');
-    assertEqual(joined[0][1], coordinator.id,
-        'rooms must join the selected coordinator');
-} finally {
-    joinAllClient.destroy();
+async function testJoinRoom() {
+    const joinedTopology = topology(group('joined', kitchen, library));
+    const client = new RecordingClient({convergedTopologies: [joinedTopology]});
+    try {
+        const result = await client.joinRoom(library, kitchen);
+        assert(result === joinedTopology,
+            'joining must return the converged topology');
+        assertEqual(client.posts[0].action, 'SetAVTransportURI',
+            'joining must use the Sonos grouping action');
+        assertEqual(client.posts[0].parameters.CurrentURI, 'x-rincon:kitchen',
+            'joining must target the selected coordinator');
+        assertEqual(client.waits.length, 1,
+            'a single join needs one convergence wait');
+    } finally {
+        client.destroy();
+    }
 }
 
-const groupedTopology = {
-    groups: [{
-        id: 'joined',
-        members: [{id: 'coordinator'}, {id: 'new-room'}],
-    }],
-    speakers: [],
-};
-
-const convergenceClient = new SonosClient();
-try {
-    convergenceClient.getTopology = async () => groupedTopology;
-    const result = await convergenceClient._waitForTopology(
-        candidate => candidate === groupedTopology,
-        'test convergence');
-    assert(result === groupedTopology,
-        'convergence must return the matching topology');
-} finally {
-    convergenceClient.destroy();
-}
-
-const joinClient = new SonosClient();
-try {
-    let joinAction = null;
-    joinClient._post = async (_origin, _path, _service, action, parameters) => {
-        joinAction = [action, parameters.CurrentURI];
-    };
-    joinClient._waitForTopology = async predicate => {
-        assert(predicate(groupedTopology),
-            'join convergence must require both rooms in one group');
-        return groupedTopology;
-    };
-    const result = await joinClient.joinRoom({
-        id: 'new-room',
-        name: 'New Room',
-        location: 'http://192.0.2.20:1400/device.xml',
-    }, {id: 'coordinator'});
-    assertEqual(joinAction.join(','),
-        'SetAVTransportURI,x-rincon:coordinator',
-        'joining must target the selected coordinator');
-    assert(result === groupedTopology,
-        'joining must return the converged topology');
-} finally {
-    joinClient.destroy();
-}
-
-const standaloneTopology = {
-    groups: [{id: 'standalone', members: [{id: 'new-room'}]}],
-    speakers: [],
-};
-
-const leaveClient = new SonosClient();
-try {
-    leaveClient._post = async (_origin, _path, _service, action) => {
-        assertEqual(action, 'BecomeCoordinatorOfStandaloneGroup',
+async function testLeaveRoom() {
+    const standaloneTopology = topology(group('standalone', library));
+    const client = new RecordingClient({convergedTopologies: [standaloneTopology]});
+    try {
+        const result = await client.leaveGroup(library);
+        assert(result === standaloneTopology,
+            'leaving must return the converged topology');
+        assertEqual(client.posts[0].action, 'BecomeCoordinatorOfStandaloneGroup',
             'leaving must request a standalone group');
-    };
-    leaveClient._waitForTopology = async predicate => {
-        assert(predicate(standaloneTopology),
-            'leave convergence must require a singleton group');
-        return standaloneTopology;
-    };
-    const result = await leaveClient.leaveGroup({
-        id: 'new-room',
-        name: 'New Room',
-        location: 'http://192.0.2.20:1400/device.xml',
-    });
-    assert(result === standaloneTopology,
-        'leaving must return the converged topology');
-} finally {
-    leaveClient.destroy();
+        assertEqual(client.waits.length, 1,
+            'a single leave needs one convergence wait');
+    } finally {
+        client.destroy();
+    }
 }
 
-const keepOnlyClient = new SonosClient();
-try {
-    const left = [];
-    keepOnlyClient.leaveGroup = async room => {
-        left.push(room.id);
-        return standaloneTopology;
-    };
-    await keepOnlyClient.keepOnly({
-        members: [
-            {id: 'coordinator', coordinator: true},
-            {id: 'source', coordinator: false},
-            {id: 'peer', coordinator: false},
-        ],
-    }, {id: 'source'});
-    assertEqual(left.join(','), 'peer,coordinator',
-        'a non-coordinator source must detach its coordinator last');
-} finally {
-    keepOnlyClient.destroy();
+async function testJoinAllAsOneBatch() {
+    const joinedTopology = topology(group('joined', kitchen, library, office));
+    const client = new RecordingClient({convergedTopologies: [joinedTopology]});
+    try {
+        const result = await client.joinAll(
+            separateTopology, separateTopology.groups[0]);
+        assert(result === joinedTopology,
+            'play everywhere must return the final topology');
+        assertEqual(client.posts.length, 2,
+            'play everywhere must request every room outside the target group');
+        assert(client.posts.every(post =>
+            post.parameters.CurrentURI === 'x-rincon:kitchen'),
+            'every room must join the selected coordinator');
+        assertEqual(client.waits.length, 1,
+            'play everywhere must converge once after the mutation batch');
+    } finally {
+        client.destroy();
+    }
 }
+
+async function testKeepOnlyInTwoPhases() {
+    const grouped = group('all', kitchen, library, office);
+    const peerSeparated = topology(
+        group('kitchen-and-library', kitchen, library),
+        group('office-only', office));
+    const allSeparated = topology(
+        group('kitchen-only', kitchen),
+        group('library-only', library),
+        group('office-only', office));
+    const client = new RecordingClient({
+        convergedTopologies: [peerSeparated, allSeparated],
+    });
+    try {
+        const result = await client.keepOnly(grouped, library);
+        assert(result === allSeparated,
+            'keep only must return the final topology');
+        assertEqual(client.posts.length, 2,
+            'keep only must detach every other room');
+        assertEqual(client.posts[0].origin, 'http://192.0.2.12:1400',
+            'peers must leave before the coordinator');
+        assertEqual(client.posts[1].origin, 'http://192.0.2.10:1400',
+            'the coordinator must leave in the final phase');
+        assertEqual(client.waits.length, 2,
+            'coordinator-last grouping requires exactly two convergence phases');
+    } finally {
+        client.destroy();
+    }
+}
+
+async function testKeepCoordinatorOnlyAsOneBatch() {
+    const grouped = group('all', kitchen, library, office);
+    const allSeparated = topology(
+        group('kitchen-only', kitchen),
+        group('library-only', library),
+        group('office-only', office));
+    const client = new RecordingClient({convergedTopologies: [allSeparated]});
+    try {
+        const result = await client.keepOnly(grouped, kitchen);
+        assert(result === allSeparated,
+            'keeping the coordinator must return the final topology');
+        assertEqual(client.posts.length, 2,
+            'all peers must receive a leave request');
+        assertEqual(client.waits.length, 1,
+            'independent peers must converge as one batch');
+    } finally {
+        client.destroy();
+    }
+}
+
+await testPlaybackStates();
+await testJoinRoom();
+await testLeaveRoom();
+await testJoinAllAsOneBatch();
+await testKeepOnlyInTwoPhases();
+await testKeepCoordinatorOnlyAsOneBatch();
 
 print('client tests passed');
